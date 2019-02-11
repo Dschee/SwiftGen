@@ -81,54 +81,66 @@ extension Config {
         logger(.warning, "`\(cmd)` action has been deprecated, please use `\(replacement)` instead.")
       }
 
-      let entriesCount = "\(entries.count) " + (entries.count > 1 ? "entries" : "entry")
-      logger(.info, "> \(entriesCount) for command \(cmd):")
-      for entry in entries {
-        lint(cmd: cmd, entry: entry, logger: logger)
+      if let parserCmd = ParserCLI.command(named: cmd) {
+        let entriesCount = "\(entries.count) " + (entries.count > 1 ? "entries" : "entry")
+        logger(.info, "> \(entriesCount) for command \(cmd):")
+        for entry in entries {
+          lint(cmd: parserCmd, entry: entry, logger: logger)
+        }
+      } else {
+        logger(.error, "Action `\(cmd)` does not exist.")
       }
     }
   }
 
-  private func lint(cmd: String, entry: ConfigEntry, logger: (LogLevel, String) -> Void) {
+  private func lint(cmd: ParserCLI, entry: ConfigEntry, logger: (LogLevel, String) -> Void) {
     var entry = entry
     entry.makingRelativeTo(inputDir: inputDir, outputDir: outputDir)
 
     for inputPath in entry.inputs {
       if !inputPath.exists {
-        logger(.error, "\(cmd).inputs: \(inputPath) does not exist")
+        logger(.error, "\(cmd.name).inputs: \(inputPath) does not exist")
       }
       if inputPath.isAbsolute {
         logger(
           .warning,
           """
-          \(cmd).inputs: \(inputPath) is an absolute path. Prefer relative paths for portability \
+          \(cmd.name).inputs: \(inputPath) is an absolute path. Prefer relative paths for portability \
           when sharing your project.
           """
         )
       }
     }
 
+    if let regex = entry.filter, (try? Filter(pattern: regex)) == nil {
+      logger(.error, "\(cmd.name).filter: \(regex) is not a valid regular expression.")
+    }
+
+    for issue in cmd.parserType.allOptions.lint(options: entry.options) {
+      logger(.error, "\(cmd.name).options: \(issue)")
+    }
+
     for entryOutput in entry.outputs {
       lint(cmd: cmd, output: entryOutput, logger: logger)
     }
 
-    for item in entry.commandLine(forCommand: cmd) {
+    for item in entry.commandLine(forCommand: cmd.name) {
       logMessage(.info, " $ \(item)")
     }
   }
 
-  private func lint(cmd: String, output entryOutput: ConfigEntryOutput, logger: (LogLevel, String) -> Void) {
+  private func lint(cmd: ParserCLI, output entryOutput: ConfigEntryOutput, logger: (LogLevel, String) -> Void) {
     do {
-      let actualCmd = Config.deprecatedCommands[cmd] ?? cmd
+      let actualCmd = Config.deprecatedCommands[cmd.name] ?? cmd.name
       _ = try entryOutput.template.resolvePath(forSubcommand: actualCmd)
     } catch let error {
-      logger(.error, "\(cmd).outputs: \(error)")
+      logger(.error, "\(cmd.name).outputs: \(error)")
     }
     if case TemplateRef.path(let templateRef) = entryOutput.template, templateRef.isAbsolute {
       logger(
         .warning,
         """
-        \(cmd).outputs.templatePath: \(templateRef) is an absolute path. Prefer relative paths \
+        \(cmd.name).outputs.templatePath: \(templateRef) is an absolute path. Prefer relative paths \
         for portability when sharing your project.
         """
       )
@@ -139,7 +151,7 @@ extension Config {
       logger(
         .error,
         """
-        \(cmd).outputs.output: \(outputParent) does not exist. Intermediate folders up to the \
+        \(cmd.name).outputs.output: \(outputParent) does not exist. Intermediate folders up to the \
         output file must already exist to avoid misconfigurations, and won't be created for you.
         """
       )
@@ -148,7 +160,7 @@ extension Config {
       logger(
         .warning,
         """
-        \(cmd).outputs.output: \(entryOutput.output) is an absolute path. Prefer relative paths \
+        \(cmd.name).outputs.output: \(entryOutput.output) is an absolute path. Prefer relative paths \
         for portability when sharing your project.
         """
       )
